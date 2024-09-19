@@ -66,10 +66,12 @@ pub struct Replica {
     /// Contains the latest character timestamps of all the replicas that this
     /// replica has seen so far.
     version_map: VersionMap,
+    local_version_creation_counter: Length,
 
     /// A clock that keeps track of the order in which insertions happened at
     /// this replica.
     deletion_map: DeletionMap,
+    local_deletion_creation_counter: DeletionTs,
 
     /// A collection of remote edits waiting to be merged.
     backlog: Backlog,
@@ -464,6 +466,19 @@ impl Replica {
     where
         R: RangeBounds<Length>,
     {
+        let deletion = self.create_deletion(range);
+        self.merge_unchecked_deletion(&deletion);
+        deletion
+    }
+
+    /// Creates a deletion without integrating it.
+    #[track_caller]
+    #[must_use]
+    #[inline]
+    pub fn create_deletion<R>(&mut self, range: R) -> Deletion
+    where
+        R: RangeBounds<Length>,
+    {
         let (start, end) = range_bounds_to_start_end(range, 0, self.len());
 
         if end > self.len() {
@@ -478,20 +493,16 @@ impl Replica {
             return Deletion::no_op();
         }
 
-        let deleted_range = (start..end).into();
+        let start = self.create_anchor(start, AnchorBias::Right);
+        let end = self.create_anchor(end, AnchorBias::Left);
 
-        let mut version_map = VersionMap::new(self.id(), 0);
-
-        let (start, end) =
-            self.run_tree.delete(deleted_range, &mut version_map);
-
-        for (id, ts) in version_map.iter_mut() {
-            *ts = self.version_map.get(id);
+        // sanity
+        if self.local_deletion_creation_counter < self.deletion_map.this() {
+            self.local_deletion_creation_counter = self.deletion_map.this();
         }
+        self.local_deletion_creation_counter += 1;
 
-        *self.deletion_map.this_mut() += 1;
-
-        Deletion::new(start, end, version_map, self.deletion_map.this())
+        Deletion::new(start.inner(), end.inner(), self.version_map.clone(), self.local_deletion_creation_counter)
     }
 
     #[doc(hidden)]
@@ -567,7 +578,9 @@ impl Replica {
             run_clock: RunClock::new(),
             lamport_clock: self.lamport_clock,
             version_map: self.version_map.fork(new_id, 0),
+            local_version_creation_counter: 0,
             deletion_map: self.deletion_map.fork(new_id, 0),
+            local_deletion_creation_counter: 0,
             backlog: self.backlog.clone(),
         }
     }
@@ -624,6 +637,16 @@ impl Replica {
     #[must_use]
     #[inline]
     pub fn inserted(&mut self, at_offset: Length, len: Length) -> Insertion {
+        let insertion = self.create_insertion(at_offset, len);
+        self.merge_unchecked_insertion(&insertion);
+        insertion
+    }
+
+    /// Creates an insertion without implicitly applying it.
+    #[track_caller]
+    #[must_use]
+    #[inline]
+    pub fn create_insertion(&mut self, at_offset: Length, len: Length) -> Insertion {
         if at_offset > self.len() {
             panic::offset_out_of_bounds(at_offset, self.len());
         }
@@ -632,26 +655,24 @@ impl Replica {
             return Insertion::no_op();
         }
 
-        let start = self.version_map.this();
+        // for sanity
+        if self.local_version_creation_counter < self.version_map.this() {
+            self.local_version_creation_counter = self.version_map.this();
+        }
 
-        *self.version_map.this_mut() += len;
-
-        let end = self.version_map.this();
+        let start = self.local_version_creation_counter;
+        self.local_version_creation_counter += len;
+        let end = self.local_version_creation_counter;
 
         let text = Text::new(self.id, start..end);
 
-        let anchor = self.run_tree.insert(
-            at_offset,
-            text.clone(),
-            &mut self.run_clock,
-            &mut self.lamport_clock,
-        );
+        let anchor = self.create_anchor(at_offset, AnchorBias::Left);
 
         Insertion::new(
-            anchor,
+            anchor.inner(),
             text,
-            self.lamport_clock.highest(),
-            self.run_clock.last(),
+            self.lamport_clock.next(),
+            self.run_clock.next(),
         )
     }
 
@@ -906,7 +927,9 @@ impl Replica {
             run_clock,
             lamport_clock,
             version_map: VersionMap::new(id, len),
+            local_version_creation_counter: 0,
             deletion_map: DeletionMap::new(id, 0),
+            local_deletion_creation_counter: 0,
             backlog: Backlog::new(),
         }
     }
