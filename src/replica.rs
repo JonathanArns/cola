@@ -412,7 +412,9 @@ impl Replica {
                 run_tree,
                 lamport_clock,
                 mut version_map,
+                local_version_creation_counter,
                 mut deletion_map,
+                local_deletion_creation_counter,
                 backlog,
             ),
             _,
@@ -431,7 +433,9 @@ impl Replica {
             run_clock: RunClock::new(),
             lamport_clock,
             version_map,
+            local_version_creation_counter,
             deletion_map,
+            local_deletion_creation_counter,
             backlog,
         };
 
@@ -1109,7 +1113,9 @@ mod encode {
             self.run_tree.encode(buf);
             self.lamport_clock.encode(buf);
             self.version_map.encode(buf);
+            self.local_version_creation_counter.encode(buf);
             self.deletion_map.encode(buf);
+            self.local_deletion_creation_counter.encode(buf);
             self.backlog.encode(buf);
         }
     }
@@ -1172,7 +1178,7 @@ mod encode {
     }
 
     impl Decode for Replica {
-        type Value = (RunTree, LamportClock, VersionMap, DeletionMap, Backlog);
+        type Value = (RunTree, LamportClock, VersionMap, Length, DeletionMap, DeletionTs, Backlog);
 
         type Error = ReplicaDecodeError;
 
@@ -1181,10 +1187,12 @@ mod encode {
             let (run_tree, buf) = RunTree::decode(buf)?;
             let (lamport_clock, buf) = LamportClock::decode(buf)?;
             let (version_map, buf) = VersionMap::decode(buf)?;
+            let (local_version_creation_counter, buf) = Length::decode(buf)?;
             let (deletion_map, buf) = DeletionMap::decode(buf)?;
+            let (local_deletion_creation_counter, buf) = DeletionTs::decode(buf)?;
             let (backlog, buf) = Backlog::decode(buf)?;
             let this =
-                (run_tree, lamport_clock, version_map, deletion_map, backlog);
+                (run_tree, lamport_clock, version_map, local_version_creation_counter, deletion_map, local_deletion_creation_counter, backlog);
             Ok((this, buf))
         }
     }
