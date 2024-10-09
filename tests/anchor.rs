@@ -85,6 +85,39 @@ fn anchor_end_right_bias() {
     assert_eq!(replica.resolve_anchor(anchor).unwrap(), 15);
 }
 
+#[test]
+fn create_insertion_without_implicit_integration() {
+    let mut replica = Replica::new(1, 0);
+
+    let _ = replica.inserted(0, 5);
+
+    let anchor = replica.create_anchor(5, AnchorBias::Right);
+
+    let insertion = replica.create_insertion(5, 5);
+
+    assert_eq!(replica.resolve_anchor(anchor).unwrap(), 5);
+    let output = replica.integrate_insertion(&insertion);
+    assert_eq!(output, Some(5));
+    assert_eq!(replica.resolve_anchor(anchor).unwrap(), 10);
+}
+
+#[test]
+fn create_insertion_without_implicit_integration_remote() {
+    let replica = Replica::new(1, 0);
+    let mut fork = replica.fork(2);
+
+    let anchor = fork.create_anchor(0, AnchorBias::Right);
+
+    let insertion = fork.create_insertion(0, 5);
+
+    fork = replica.fork(2);
+
+    assert_eq!(fork.resolve_anchor(anchor).unwrap(), 0);
+    let output = fork.integrate_insertion(&insertion);
+    assert_eq!(output, Some(0));
+    assert_eq!(fork.resolve_anchor(anchor).unwrap(), 5);
+}
+
 /// Tests that we stop before the deleted runs when anchoring to the end of the
 /// document with left bias.
 #[test]
